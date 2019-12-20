@@ -1,44 +1,36 @@
-# Import libraries
+# import libraries
 import sys
 import pandas as pd
 import numpy as np
+import pickle
 from sqlalchemy import create_engine
 import re
-import pickle
 import nltk
-
-nltk.download('punkt')
-nltk.download('stopwords')
-
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from nltk.stem.porter import PorterStemmer
-
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.multioutput import MultiOutputClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, make_scorer
-from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.metrics import fbeta_score, classification_report
+from scipy.stats.mstats import gmean
 
-import warnings
-
-warnings.simplefilter('ignore')
+nltk.download(['punkt', 'wordnet', 'averaged_perceptron_tagger'])
 
 
 def load_data(database_filepath):
-    """Load and merge messages and categories datasets
-    
-    Args:
-    database_filename: string. Filename for SQLite database containing cleaned message data.
-       
-    Returns:
-    X: dataframe. Dataframe containing features dataset.
-    Y: dataframe. Dataframe containing labels dataset.
-    category_names: list of strings. List containing category names.
     """
-    # Load data from database
+    Load Data Function
+    
+    Arguments:
+        database_filepath -> path to SQLite db
+    Output:
+        X -> feature DataFrame
+        Y -> label DataFrame
+        category_names -> used for data visualization (app)
+    """
     engine = create_engine('sqlite:///' + database_filepath)
     df = pd.read_sql("SELECT * FROM Messages", engine)
     
@@ -50,144 +42,177 @@ def load_data(database_filepath):
     category_names = list(Y.columns.values)
     
     return X, Y, category_names
+    category_names = Y.columns
+    return X, Y, category_names
+
 
 def tokenize(text):
-    """Normalize, tokenize and stem text string
-    
-    Args:
-    text: string. String containing message for processing
-       
-    Returns:
-    stemmed: list of strings. List containing normalized and stemmed word tokens
     """
-    # Convert text to lowercase and remove punctuation
-    text = re.sub(r"[^a-zA-Z0-9]", " ", text.lower())
+    Tokenize function
     
-    # Tokenize words
+    Arguments:
+        text -> list of text messages (english)
+    Output:
+        clean_tokens -> tokenized text, clean for ML modeling
+    """
+    url_regex = 'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    detected_urls = re.findall(url_regex, text)
+    for url in detected_urls:
+        text = text.replace(url, "urlplaceholder")
+
     tokens = word_tokenize(text)
-    
-    # Stem word tokens and remove stop words
-    stemmer = PorterStemmer()
-    stop_words = stopwords.words("english")
-    
-    stemmed = [stemmer.stem(word) for word in tokens if word not in stop_words]
-    
-    return stemmed
+    lemmatizer = WordNetLemmatizer()
 
-# Define performance metric for use in grid search scoring object
-def performance_metric(y_true, y_pred):
-    """Calculate median F1 score for all of the output classifiers
+    clean_tokens = []
+    for tok in tokens:
+        clean_tok = lemmatizer.lemmatize(tok).lower().strip()
+        clean_tokens.append(clean_tok)
 
-        Args:
-        y_true: array. Array containing actual labels.
-        y_pred: array. Array containing predicted labels.
+    return clean_tokens
 
-        Returns:
-        score: float. Median F1 score for all of the output classifiers
-        """
-    f1_list = []
-    for i in range(np.shape(y_pred)[1]):
-        f1 = f1_score(np.array(y_true)[:, i], y_pred[:, i])
-        f1_list.append(f1)
-        
-    score = np.median(f1_list)
-    return score
+class StartingVerbExtractor(BaseEstimator, TransformerMixin):
+    """
+    Starting Verb Extractor class
     
+    This class extract the starting verb of a sentence,
+    creating a new feature for the ML classifier
+    """
+
+    def starting_verb(self, text):
+        sentence_list = nltk.sent_tokenize(text)
+        for sentence in sentence_list:
+            pos_tags = nltk.pos_tag(tokenize(sentence))
+            first_word, first_tag = pos_tags[0]
+            if first_tag in ['VB', 'VBP'] or first_word == 'RT':
+                return True
+        return False
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X_tagged = pd.Series(X).apply(self.starting_verb)
+        return pd.DataFrame(X_tagged)
+
 def build_model():
-    """Build a machine learning pipeline
-    
-    Args:
-    None
-       
-    Returns:
-    cv: gridsearchcv object. Gridsearchcv object that transforms the data, creates the 
-    model object and finds the optimal model parameters.
     """
-    # Create pipeline
-    pipeline = Pipeline([
-        ('vect', CountVectorizer(tokenizer = tokenize, min_df = 5)),
-        ('tfidf', TfidfTransformer(use_idf = True)),
-        ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators = 10,
-                                                             min_samples_split = 10)))
+    Build Model function
+    
+    This function output is a Scikit ML Pipeline that process text messages
+    according to NLP best-practice and apply a classifier.
+    """
+    model = Pipeline([
+        ('features', FeatureUnion([
+
+            ('text_pipeline', Pipeline([
+                ('vect', CountVectorizer(tokenizer=tokenize)),
+                ('tfidf', TfidfTransformer())
+            ])),
+
+            ('starting_verb', StartingVerbExtractor())
+        ])),
+
+        ('clf', MultiOutputClassifier(AdaBoostClassifier()))
     ])
-    
-    # Create parameters dictionary
-    parameters = {'vect__min_df': [1, 5],
-                  'tfidf__use_idf':[True, False],
-                  'clf__estimator__n_estimators':[10, 25], 
-                  'clf__estimator__min_samples_split':[2, 5, 10]}
-    
-    # Create scorer
-    scorer = make_scorer(performance_metric)
-    
-    # Create grid search object
-    cv = GridSearchCV(pipeline, param_grid = parameters, scoring = scorer, verbose = 10)
-    return cv
 
+    return model
 
-def get_eval_metrics(actual, predicted, col_names):
-    """Calculate evaluation metrics for ML model
-    
-    Args:
-    actual: array. Array containing actual labels.
-    predicted: array. Array containing predicted labels.
-    col_names: list of strings. List containing names for each of the predicted fields.
-       
-    Returns:
-    metrics_df: dataframe. Dataframe containing the accuracy, precision, recall 
-    and f1 score for a given set of actual and predicted labels.
+def multioutput_fscore(y_true,y_pred,beta=1):
     """
-    metrics = []
+    MultiOutput Fscore
     
-    # Calculate evaluation metrics for each set of labels
-    for i in range(len(col_names)):
-        accuracy = accuracy_score(actual[:, i], predicted[:, i])
-        precision = precision_score(actual[:, i], predicted[:, i])
-        recall = recall_score(actual[:, i], predicted[:, i])
-        f1 = f1_score(actual[:, i], predicted[:, i])
+    This is a performance metric of my own creation.
+    It is a sort of geometric mean of the fbeta_score, computed on each label.
+    
+    It is compatible with multi-label and multi-class problems.
+    It features some peculiarities (geometric mean, 100% removal...) to exclude
+    trivial solutions and deliberatly under-estimate a stangd fbeta_score average.
+    The aim is avoiding issues when dealing with multi-class/multi-label imbalanced cases.
+    
+    It can be used as scorer for GridSearchCV:
+        scorer = make_scorer(multioutput_fscore,beta=1)
         
-        metrics.append([accuracy, precision, recall, f1])
+    Arguments:
+        y_true -> labels
+        y_prod -> predictions
+        beta -> beta value of fscore metric
     
-    # Create dataframe containing metrics
-    metrics = np.array(metrics)
-    metrics_df = pd.DataFrame(data = metrics, index = col_names, columns = ['Accuracy', 'Precision', 'Recall', 'F1'])
-      
-    return metrics_df
-
+    Output:
+        f1score -> customized fscore
+    """
+    score_list = []
+    if isinstance(y_pred, pd.DataFrame) == True:
+        y_pred = y_pred.values
+    if isinstance(y_true, pd.DataFrame) == True:
+        y_true = y_true.values
+    for column in range(0,y_true.shape[1]):
+        score = fbeta_score(y_true[:,column],y_pred[:,column],beta,average='weighted')
+        score_list.append(score)
+    f1score_numpy = np.asarray(score_list)
+    f1score_numpy = f1score_numpy[f1score_numpy<1]
+    f1score = gmean(f1score_numpy)
+    return  f1score
 
 def evaluate_model(model, X_test, Y_test, category_names):
-    """Returns test accuracy, precision, recall and F1 score for fitted model
-    
-    Args:
-    model: model object. Fitted model object.
-    X_test: dataframe. Dataframe containing test features dataset.
-    Y_test: dataframe. Dataframe containing test labels dataset.
-    category_names: list of strings. List containing category names.
-    
-    Returns:
-    None
     """
-    # Predict labels for test dataset
+    Evaluate Model function
+    
+    This function applies ML pipeline to a test set and prints out
+    model performance (accuracy and f1score)
+    
+    Arguments:
+        model -> Scikit ML Pipeline
+        X_test -> test features
+        Y_test -> test labels
+        category_names -> label names (multi-output)
+    """
     Y_pred = model.predict(X_test)
     
-    # Calculate and print evaluation metrics
-    eval_metrics = get_eval_metrics(np.array(Y_test), Y_pred, category_names)
-    print(eval_metrics)
+    multi_f1 = multioutput_fscore(Y_test,Y_pred, beta = 1)
+    overall_accuracy = (Y_pred == Y_test).mean().mean()
+
+    print('Average overall accuracy {0:.2f}% \n'.format(overall_accuracy*100))
+    print('F1 score (custom definition) {0:.2f}%\n'.format(multi_f1*100))
+
+    # Print the whole classification report.
+    # Extremely long output
+    # Work In Progress: Save Output as Text file!
     
+    #Y_pred = pd.DataFrame(Y_pred, columns = Y_test.columns)
+    
+    #for column in Y_test.columns:
+    #    print('Model Performance with Category: {}'.format(column))
+    #    print(classification_report(Y_test[column],Y_pred[column]))
+    pass
+
 
 def save_model(model, model_filepath):
-    """Pickle fitted model
-    
-    Args:
-    model: model object. Fitted model object.
-    model_filepath: string. Filepath for where fitted model should be saved
-    
-    Returns:
-    None
     """
-    pickle.dump(model.best_estimator_, open(model_filepath, 'wb'))
+    Save Model function
+    
+    This function saves trained model as Pickle file, to be loaded later.
+    
+    Arguments:
+        model -> GridSearchCV or Scikit Pipelin object
+        model_filepath -> destination path to save .pkl file
+    
+    """
+    filename = model_filepath
+    pickle.dump(model, open(filename, 'wb'))
+    pass
+
 
 def main():
+    """
+    Train Classifier Main function
+    
+    This function applies the Machine Learning Pipeline:
+        1) Extract data from SQLite db
+        2) Train ML model on training set
+        3) Estimate model performance on test set
+        4) Save trained model as Pickle
+    
+    """
     if len(sys.argv) == 3:
         database_filepath, model_filepath = sys.argv[1:]
         print('Loading data...\n    DATABASE: {}'.format(database_filepath))
