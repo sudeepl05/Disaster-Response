@@ -35,11 +35,12 @@ The app uses a ML model to categorize any new messages received, and the reposit
 
 ## Screenshots
 
-***Screenshot 1: App Front Page***
-![Screenshot 1](https://github.com/gkhayes/disaster_response_app/blob/master/Screenshot1.JPG)
+***Homepage 1: App Front Page***
+![Homepage 1](https://github.com/sudeepl05/Disaster-Response/blob/master/Homepage%201.JPG)
+![Homepage 2](https://github.com/sudeepl05/Disaster-Response/blob/master/Homepage%202.JPG)
 
 ***Screenshot 2: App Results Page***
-![Screenshot 2](https://github.com/gkhayes/disaster_response_app/blob/master/Screenshot2.JPG)
+![Disaster Response Page](https://github.com/sudeepl05/Disaster-Response/blob/master/Disaster%20Response%201.JPG)
 
 ## Warning
 The datasets included in this repository are very unbalanced, with very few positive examples for several message categories. In some cases, the proportion of positive examples is less than 5%, or even less than 1%. In such cases, even though the classifier accuracy is very high (since it tends to predict that the message does not fall into these categories), the classifier recall (i.e. the proportion of positive examples that were correctly labelled) tends to be very low. As a result, care should be taken if relying on the results of this app for decision making purposes.
