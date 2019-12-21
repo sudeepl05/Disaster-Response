@@ -1,95 +1,69 @@
-# Import packages
 import sys
-import pandas as pd
 import numpy as np
+import pandas as pd
 from sqlalchemy import create_engine
-
+ 
 def load_data(messages_filepath, categories_filepath):
-    """Load and merge messages and categories datasets
-    
-    Args:
-    messages_filepath: string. Filepath for csv file containing messages dataset.
-    categories_filepath: string. Filepath for csv file containing categories dataset.
-       
-    Returns:
-    df: dataframe. Dataframe containing merged content of messages and categories datasets.
     """
+    Load Data function
     
-    # Load messages dataset
+    Arguments:
+        messages_filepath -> path to messages csv file
+        categories_filepath -> path to categories csv file
+    Output:
+        df -> Loaded dasa as Pandas DataFrame
+    """
     messages = pd.read_csv(messages_filepath)
-    
-    # Load categories dataset
     categories = pd.read_csv(categories_filepath)
-    
-    # Merge datasets
-    df = messages.merge(categories, how = 'left', on = ['id'])
-    
-    return df
+    df = pd.merge(messages,categories,on='id')
+    return df 
 
 def clean_data(df):
-    """Clean dataframe by removing duplicates and converting categories from strings 
-    to binary values.
-    
-    Args:
-    df: dataframe. Dataframe containing merged content of messages and categories datasets.
-       
-    Returns:
-    df: dataframe. Dataframe containing cleaned version of input dataframe.
     """
+    Clean Data function
     
-    # Create a dataframe of the 36 individual category columns
-    categories = df['categories'].str.split(';', expand = True)
-    
-    # Select the first row of the categories dataframe
-    row = categories.iloc[0]
-
-    # use this row to extract a list of new column names for categories.
-    # one way is to apply a lambda function that takes everything 
-    # up to the second to last character of each string with slicing
-    category_colnames = row.transform(lambda x: x[:-2]).tolist()
-    
-    # Rename the columns of `categories`
+    Arguments:
+        df -> raw data Pandas DataFrame
+    Outputs:
+        df -> clean data Pandas DataFrame
+    """
+    categories = df.categories.str.split(pat=';',expand=True)
+    firstrow = categories.iloc[0,:]
+    category_colnames = firstrow.apply(lambda x:x[:-2])
     categories.columns = category_colnames
-    
-    # Convert  category values to numeric values
     for column in categories:
-        # set each value to be the last character of the string
-        categories[column] = categories[column].transform(lambda x: x[-1:])
-        
-        # convert column from string to numeric
-        categories[column] = pd.to_numeric(categories[column])
-    
-    # Drop the original categories column from `df`
-    df.drop('categories', axis = 1, inplace = True)
-    
-    
-    # Concatenate the original dataframe with the new `categories` dataframe
-    df = pd.concat([df, categories], axis = 1)
-    
-    # Drop duplicates
-    df.drop_duplicates(inplace = True)
-    
-    # Remove rows with a related value of 2 from the dataset
-    df = df[df['related'] != 2]
-    
+        categories[column] = categories[column].str[-1]
+        categories[column] = categories[column].astype(np.int)
+    df = df.drop('categories',axis=1)
+    df = pd.concat([df,categories],axis=1)
+    #df = pd.concat([df,pd.get_dummies(df.genre)],axis=1)
+    #df = df.drop(['genre','social'],axis=1) 
+    df = df.drop_duplicates()
     return df
 
-
 def save_data(df, database_filename):
-    """Save cleaned data into an SQLite database.
-    
-    Args:
-    df: dataframe. Dataframe containing cleaned version of merged message and 
-    categories data.
-    database_filename: string. Filename for output database.
-       
-    Returns:
-    None
     """
-    engine = create_engine('sqlite:///' + database_filename)
-    df.to_sql('Messages', engine, index=False, if_exists='replace')
+    Save Data function
     
+    Arguments:
+        df -> Clean data Pandas DataFrame
+        database_filename -> database file (.db) destination path
+    """
+    engine = create_engine('sqlite:///'+ database_filename)
+    df.to_sql('Messages', engine, index=False)
+    pass  
+
+
 def main():
+    """
+    Main Data Processing function
+    
+    This function implement the ETL pipeline:
+        1) Data extraction from .csv
+        2) Data cleaning and pre-processing
+        3) Data loading to SQLite database
+    """
+    print(sys.argv)
     if len(sys.argv) == 4:
 
         messages_filepath, categories_filepath, database_filepath = sys.argv[1:]
