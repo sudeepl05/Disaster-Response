@@ -3,7 +3,11 @@ import plotly
 import pandas as pd
 
 from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import word_tokenize, sent_tokenize
+from nltk import pos_tag, word_tokenize
+import nltk
+
+from sklearn.base import BaseEstimator, TransformerMixin
 
 from flask import Flask
 from flask import render_template, request, jsonify
@@ -13,6 +17,24 @@ from sqlalchemy import create_engine
 
 
 app = Flask(__name__)
+
+class StartingVerbExtractor(BaseEstimator, TransformerMixin):
+
+    def starting_verb(self, text):
+        sentence_list = nltk.sent_tokenize(text)
+        for sentence in sentence_list:
+            pos_tags = nltk.pos_tag(tokenize(sentence))
+            first_word, first_tag = pos_tags[0]
+            if first_tag in ['VB', 'VBP'] or first_word == 'RT':
+                return True
+        return False
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X_tagged = pd.Series(X).apply(self.starting_verb)
+        return pd.DataFrame(X_tagged)
 
 def tokenize(text):
     tokens = word_tokenize(text)
@@ -36,65 +58,56 @@ model = joblib.load("../models/classifier.pkl")
 # index webpage displays cool visuals and receives user input text for model
 @app.route('/')
 @app.route('/index')
-
 def index():
     
     # extract data needed for visuals
-    # Calculate message count by genre and related status    
-    genre_related = df[df['related']==1].groupby('genre').count()['message']
-    genre_not_rel = df[df['related']==0].groupby('genre').count()['message']
-    genre_names = list(genre_related.index)
+    # TODO: Below is an example - modify to extract data for your own visuals
+    genre_counts = df.groupby('genre').count()['message']
+    genre_names = list(genre_counts.index)
     
-    # Calculate proportion of each category with label = 1
-    cat_props = df.drop(['id', 'message', 'original', 'genre'], axis = 1).sum()/len(df)
-    cat_props = cat_props.sort_values(ascending = False)
-    cat_names = list(cat_props.index)
-     
-
+    category_names = df.iloc[:,4:].columns
+    category_boolean = (df.iloc[:,4:] != 0).sum().values
+    
+    
     # create visuals
+    # TODO: Below is an example - modify to create your own visuals
     graphs = [
+            # GRAPH 1 - genre graph
         {
             'data': [
                 Bar(
                     x=genre_names,
-                    y=genre_related,
-                    name = 'Related'
-                ),
-                
-                Bar(
-                    x=genre_names,
-                    y=genre_not_rel,
-                    name = 'Not Related'
+                    y=genre_counts
                 )
             ],
 
             'layout': {
-                'title': 'Distribution of Messages by Genre and Related Status',
+                'title': 'Distribution of Message Genres',
                 'yaxis': {
                     'title': "Count"
                 },
                 'xaxis': {
                     'title': "Genre"
-                },
-                'barmode': 'group'
+                }
             }
         },
+            # GRAPH 2 - category graph    
         {
             'data': [
                 Bar(
-                    x=cat_names,
-                    y=cat_props
+                    x=category_names,
+                    y=category_boolean
                 )
             ],
 
             'layout': {
-                'title': 'Proportion of Messages by Category',
+                'title': 'Distribution of Message Categories',
                 'yaxis': {
-                    'title': "Proportion"
+                    'title': "Count"
                 },
                 'xaxis': {
                     'title': "Category",
-                    'tickangle': -45
+                    'tickangle': 35
                 }
             }
         }
@@ -106,6 +119,7 @@ def index():
     
     # render web page with plotly graphs
     return render_template('master.html', ids=ids, graphJSON=graphJSON)
+
 
 # web page that handles user query and displays model results
 @app.route('/go')
@@ -126,7 +140,7 @@ def go():
 
 
 def main():
-    app.run(host='0.0.0.0', port=3001, debug=True)
+    app.run(host='127.0.0.1', port=3001, debug=True)
 
 
 if __name__ == '__main__':
